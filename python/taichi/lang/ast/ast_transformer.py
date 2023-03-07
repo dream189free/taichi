@@ -2,6 +2,7 @@ import ast
 import collections.abc
 import itertools
 import operator
+import re
 import warnings
 from collections import ChainMap
 from sys import version_info
@@ -392,13 +393,24 @@ class ASTTransformer(Builder):
         return node.ptr
 
     @staticmethod
+    def build_FormattedValue(ctx, node):
+        node.ptr = build_stmt(ctx, node.value)
+        if node.format_spec is None or len(node.format_spec.values) == 0:
+            return node.ptr
+        values = node.format_spec.values
+        assert len(values) == 1
+        format_str = values[0].s if version_info < (3, 8) else values[0].value
+        assert format_str is not None
+        return [node.ptr, format_str]
+
+    @staticmethod
     def build_JoinedStr(ctx, node):
         str_spec = ''
         args = []
         for sub_node in node.values:
             if isinstance(sub_node, ast.FormattedValue):
                 str_spec += '{}'
-                args.append(build_stmt(ctx, sub_node.value))
+                args.append(build_stmt(ctx, sub_node))
             elif isinstance(sub_node, ast.Constant):
                 str_spec += sub_node.value
             elif isinstance(sub_node, ast.Str):
@@ -496,6 +508,50 @@ class ASTTransformer(Builder):
             module="taichi")
 
     @staticmethod
+    # extract format specifier from raw_string, and also handles positional arguments, if there are any
+    def extract_printf_format(raw_string, *raw_args, **keywords):
+        raw_brackets = re.findall(r'{(.*?)}', raw_string)
+        # fallback to old behavior
+        if all(':' not in bracket and not bracket.isdigit()
+               for bracket in raw_brackets):
+            raw_args = list(raw_args)
+            raw_args.insert(0, raw_string)
+            return raw_args, keywords
+
+        brackets = []
+        unnamed = 0
+        for bracket in raw_brackets:
+            item, spec = bracket.split(':') if ':' in bracket else (bracket,
+                                                                    None)
+            item = int(item) if item.isdigit() else item
+            # handle unnamed positional args
+            if item == "":
+                item = unnamed
+                unnamed += 1
+            # handle empty spec
+            if spec == "":
+                spec = None
+            brackets.append([item, spec])
+
+        # check error first
+        for (item, _) in brackets:
+            if isinstance(item, int) and item >= len(raw_args):
+                raise TaichiSyntaxError(f'Index {item} is out of range.')
+            if isinstance(item, str) and item not in keywords:
+                raise TaichiSyntaxError(f'Keyword "{item}" is not found.')
+
+        args = []
+        for (item, spec) in brackets:
+            args.append([
+                raw_args[item] if isinstance(item, int) else keywords[item],
+                spec
+            ])
+
+        args.insert(0, re.sub(r'{.*?}', '{}', raw_string))
+        # TODO: unify keyword args handling
+        return args, {}
+
+    @staticmethod
     def build_Call(ctx, node):
         if ASTTransformer.get_decorator(ctx, node) == 'static':
             with ctx.static_scope_guard():
@@ -530,7 +586,9 @@ class ASTTransformer(Builder):
 
         if isinstance(node.func, ast.Attribute) and isinstance(
                 node.func.value.ptr, str) and node.func.attr == 'format':
-            args.insert(0, node.func.value.ptr)
+            raw_string = node.func.value.ptr
+            args, keywords = ASTTransformer.extract_printf_format(
+                raw_string, *args, **keywords)
             node.ptr = impl.ti_format(*args, **keywords)
             return node.ptr
 
@@ -1467,7 +1525,8 @@ class ASTTransformer(Builder):
 
     @staticmethod
     def ti_format_list_to_assert_msg(raw):
-        entries = impl.ti_format_list_to_content_entries([raw])
+        #TODO: ignore formats here for now
+        entries, _ = impl.ti_format_list_to_content_entries([raw])
         msg = ""
         args = []
         for entry in entries:
