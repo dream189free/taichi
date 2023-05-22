@@ -62,6 +62,7 @@ class MergeBitStructStores : public BasicStmtVisitor {
     auto &statements = block->statements;
     std::unordered_map<Stmt *, std::vector<BitStructStoreStmt *>>
         ptr_to_bit_struct_stores;
+    std::unordered_set<Stmt *> loaded_after_store;
     std::vector<Stmt *> statements_to_delete;
     for (int i = 0; i <= (int)statements.size(); i++) {
       // TODO: in some cases BitStructStoreStmts across container statements can
@@ -78,30 +79,6 @@ class MergeBitStructStores : public BasicStmtVisitor {
               values[s->ch_ids[j]].push_back(s->values[j]);
             }
           }
-          // // Skip store fusion when multiple stores are made to the same
-          // child.
-          // // Example:
-          // //   <^qi4> $18 = get child [...] $17
-          // //   $19 : atomic bit_struct_store $17, ch_ids=[0], values=[$2]
-          // //   <i32> $20 = global load $18
-          // //   print "f[i]=", $20, "\n"
-          // //   <i32> $22 = add $20 $2
-          // //   $23 : atomic bit_struct_store $17, ch_ids=[0], values=[$22]
-          // // In this case, $19 and $23 cannot be merged into a single store
-          // // because the stored value $2 is used by the `print` statement.
-          // // FIXME: The bug seems to occur only when there are multiple
-          // stores
-          // // to the same child due to some hidden assumptions.
-          // bool multi_store_to_same_ch = false;
-          // for (auto const &[_, store_stmts] : values) {
-          //   if (store_stmts.size() > 1) {
-          //     multi_store_to_same_ch = true;
-          //     break;
-          //   }
-          // }
-          // if (multi_store_to_same_ch) {
-          //   continue;
-          // }
 
           std::vector<int> ch_ids;
           std::vector<Stmt *> store_values;
@@ -123,14 +100,34 @@ class MergeBitStructStores : public BasicStmtVisitor {
         ptr_to_bit_struct_stores.clear();
         continue;
       }
+      // Skip bit store fusion when there's a load between multiple stores.
+      // Example:
+      //   <^qi16> $18 = get child [...] $17
+      //   $178 : atomic bit_struct_store $17, ch_ids=[0], values=[$11]
+      //   <i32> $20 = global load $18
+      //   print "x[i]=", $20, "\n"
+      //   <i32> $22 = add $11 $2
+      //   <^qi16> $23 = get child [...] $17
+      //   $179 : atomic bit_struct_store $17, ch_ids=[1], values=[$22]
+      //   <i32> $25 = global load $23
+      //   print "y[i]=", $25, "\n"
+      // In this case, $178 and $179 cannot be merged into a single store
+      // because the stored value $11 is loaded as $20 and then printed.
       if (auto stmt = statements[i]->cast<BitStructStoreStmt>()) {
+        // Phase 2: Find bit store after a marked load
+        if (loaded_after_store.find(stmt->ptr) != loaded_after_store.end()) {
+          loaded_after_store.erase(stmt->ptr);
+          // Disable store fusion for this bit struct
+          ptr_to_bit_struct_stores.erase(stmt->ptr);
+          continue;
+        }
         ptr_to_bit_struct_stores[stmt->ptr].push_back(stmt);
       } else if (auto load_stmt = statements[i]->cast<GlobalLoadStmt>()) {
+        // Phase 1: Find and mark any global loads after bit_struct_store
         auto load_src = load_stmt->src->operand(0);
         if (ptr_to_bit_struct_stores.find(load_src) !=
             ptr_to_bit_struct_stores.end()) {
-          // !!!
-          ptr_to_bit_struct_stores.erase(load_src);
+          loaded_after_store.insert(load_src);
         }
       }
     }
