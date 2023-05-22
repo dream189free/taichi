@@ -78,28 +78,30 @@ class MergeBitStructStores : public BasicStmtVisitor {
               values[s->ch_ids[j]].push_back(s->values[j]);
             }
           }
-          // Don't do store fusion when there's multiple stores to same child.
-          // Example:
-          //   <^qi4> $18 = get child [...] $17
-          //   $19 : atomic bit_struct_store $17, ch_ids=[0], values=[$2]
-          //   <i32> $20 = global load $18
-          //   print "f[i]=", $20, "\n"
-          //   <i32> $22 = add $20 $2
-          //   $23 : atomic bit_struct_store $17, ch_ids=[0], values=[$22]
-          // Here $19 and $23 can't be merged into a single store since the
-          // result is used by `print`.
-          // FIXME: Due to some hidden assumptions, the bug seems to be only
-          // happen when there's multiple store to same child.
-          bool multi_store_to_same_ch = false;
-          for (auto const &[_, store_stmts] : values) {
-            if (store_stmts.size() > 1) {
-              multi_store_to_same_ch = true;
-              break;
-            }
-          }
-          if (multi_store_to_same_ch) {
-            continue;
-          }
+          // // Skip store fusion when multiple stores are made to the same
+          // child.
+          // // Example:
+          // //   <^qi4> $18 = get child [...] $17
+          // //   $19 : atomic bit_struct_store $17, ch_ids=[0], values=[$2]
+          // //   <i32> $20 = global load $18
+          // //   print "f[i]=", $20, "\n"
+          // //   <i32> $22 = add $20 $2
+          // //   $23 : atomic bit_struct_store $17, ch_ids=[0], values=[$22]
+          // // In this case, $19 and $23 cannot be merged into a single store
+          // // because the stored value $2 is used by the `print` statement.
+          // // FIXME: The bug seems to occur only when there are multiple
+          // stores
+          // // to the same child due to some hidden assumptions.
+          // bool multi_store_to_same_ch = false;
+          // for (auto const &[_, store_stmts] : values) {
+          //   if (store_stmts.size() > 1) {
+          //     multi_store_to_same_ch = true;
+          //     break;
+          //   }
+          // }
+          // if (multi_store_to_same_ch) {
+          //   continue;
+          // }
 
           std::vector<int> ch_ids;
           std::vector<Stmt *> store_values;
@@ -123,6 +125,13 @@ class MergeBitStructStores : public BasicStmtVisitor {
       }
       if (auto stmt = statements[i]->cast<BitStructStoreStmt>()) {
         ptr_to_bit_struct_stores[stmt->ptr].push_back(stmt);
+      } else if (auto load_stmt = statements[i]->cast<GlobalLoadStmt>()) {
+        auto load_src = load_stmt->src->operand(0);
+        if (ptr_to_bit_struct_stores.find(load_src) !=
+            ptr_to_bit_struct_stores.end()) {
+          // !!!
+          ptr_to_bit_struct_stores.erase(load_src);
+        }
       }
     }
 
@@ -226,8 +235,12 @@ void optimize_bit_struct_stores(IRNode *root,
   TI_AUTO_PROF;
   CreateBitStructStores::run(root);
   die(root);  // remove unused GetCh
+  std::cerr << "[debug] CreateBitStructStores\n";
+  irpass::print(root);
   if (config.quant_opt_store_fusion) {
     MergeBitStructStores::run(root);
+    std::cerr << "[debug] MergeBitStructStores\n";
+    irpass::print(root);
   }
   if (config.quant_opt_atomic_demotion) {
     auto *res = amgr->get_pass_result<GatherUniquelyAccessedBitStructsPass>();
@@ -236,6 +249,8 @@ void optimize_bit_struct_stores(IRNode *root,
                    "gather_uniquely_accessed_bit_structs pass when "
                    "config.quant_opt_atomic_demotion is true.");
     DemoteAtomicBitStructStores::run(root, res->uniquely_accessed_bit_structs);
+    std::cerr << "[debug] DemoteAtomicBitStructStores\n";
+    irpass::print(root);
   }
 }
 
