@@ -1507,8 +1507,8 @@ void ASTBuilder::end_func(const std::string &funcid) {
   this->pop_scope();
 }
 
-void ASTBuilder::begin_frontend_if(const Expr &cond) {
-  auto stmt_tmp = std::make_unique<FrontendIfStmt>(cond);
+void ASTBuilder::begin_frontend_if(const Expr &cond, const DebugInfo &stmt_di) {
+  auto stmt_tmp = std::make_unique<FrontendIfStmt>(cond, stmt_di);
   this->insert(std::move(stmt_tmp));
 }
 
