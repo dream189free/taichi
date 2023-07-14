@@ -48,7 +48,8 @@ FrontendAssignStmt::FrontendAssignStmt(const Expr &lhs, const Expr &rhs)
 }
 
 FrontendIfStmt::FrontendIfStmt(const FrontendIfStmt &o)
-    : condition(o.condition),
+    : Stmt(o.dbg_info),
+      condition(o.condition),
       true_statements(o.true_statements->clone()),
       false_statements(o.false_statements->clone()) {
 }
