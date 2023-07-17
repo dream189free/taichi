@@ -203,7 +203,8 @@ class ArgLoadStmt : public Stmt {
               const DataType &dt,
               bool is_ptr,
               bool create_load,
-              int arg_depth, const DebugInfo &dbg_info = DebugInfo())
+              int arg_depth,
+              const DebugInfo &dbg_info = DebugInfo())
       : Stmt(dbg_info),
         arg_id(arg_id),
         is_ptr(is_ptr),
