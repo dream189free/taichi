@@ -97,7 +97,9 @@ def expr_init(rhs):
     if hasattr(rhs, "_data_oriented"):
         return rhs
     return Expr(
-        get_runtime().compiling_callable.ast_builder().expr_var(Expr(rhs).ptr, get_runtime().get_current_src_info())
+        get_runtime()
+        .compiling_callable.ast_builder()
+        .expr_var(Expr(rhs).ptr, _ti_core.DebugInfo(get_runtime().get_current_src_info()))
     )
 
 
