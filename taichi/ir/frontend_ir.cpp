@@ -93,7 +93,8 @@ FrontendForStmt::FrontendForStmt(const Expr &loop_var,
 }
 
 FrontendForStmt::FrontendForStmt(const FrontendForStmt &o)
-    : snode(o.snode),
+    : Stmt(o.dbg_info),
+      snode(o.snode),
       external_tensor(o.external_tensor),
       mesh(o.mesh),
       element_type(o.element_type),
